@@ -368,6 +368,21 @@ func (sc *serviceSource) endpointsFromTemplate(svc *v1.Service) ([]*endpoint.End
 	return endpoints, nil
 }
 
+// extractAnnotationsEndpoints extracts endpoints from a headless service using the "Endpoints" Kubernetes API resource
+func (sc *serviceSource) extractAnnotationsEndpoints(svc *v1.Service, hostname string, ttl endpoint.TTL) []*endpoint.Endpoint {
+	var endpoints []*endpoint.Endpoint
+
+	// If service has the target annotation then we honor it
+	targets := getTargetsFromTargetAnnotation(svc.Annotations)
+
+	if len(targets) > 0 {
+		providerSpecific, setIdentifier := getProviderSpecificAnnotations(svc.Annotations)
+		endpoints = append(endpoints, endpointsForHostname(hostname, targets, ttl, providerSpecific, setIdentifier)...)
+	}
+
+	return endpoints
+}
+
 // endpointsFromService extracts the endpoints from a service object
 func (sc *serviceSource) endpoints(svc *v1.Service) []*endpoint.Endpoint {
 	var endpoints []*endpoint.Endpoint
@@ -474,11 +489,16 @@ func (sc *serviceSource) generateEndpoints(svc *v1.Service, hostname string, pro
 			targets = append(targets, extractLoadBalancerTargets(svc)...)
 		}
 	case v1.ServiceTypeClusterIP:
-		if sc.publishInternal {
-			targets = append(targets, extractServiceIps(svc)...)
-		}
-		if svc.Spec.ClusterIP == v1.ClusterIPNone {
-			endpoints = append(endpoints, sc.extractHeadlessEndpoints(svc, hostname, ttl)...)
+		annotationsEnpoints := sc.extractAnnotationsEndpoints(svc, hostname, ttl)
+		if len(annotationsEnpoints) > 0 {
+			endpoints = append(endpoints, annotationsEnpoints...)
+		} else {
+			if sc.publishInternal {
+				targets = append(targets, extractServiceIps(svc)...)
+			}
+			if svc.Spec.ClusterIP == v1.ClusterIPNone {
+				endpoints = append(endpoints, sc.extractHeadlessEndpoints(svc, hostname, ttl)...)
+			}
 		}
 	case v1.ServiceTypeNodePort:
 		// add the nodeTargets and extract an SRV endpoint
